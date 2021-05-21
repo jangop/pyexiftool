@@ -26,11 +26,10 @@ import sys
 
 # instead of comparing everywhere sys.platform, do it all here in the constants (less typo chances)
 # True if Windows
-PLATFORM_WINDOWS: bool = (sys.platform == 'win32')
+PLATFORM_WINDOWS: bool = sys.platform == "win32"
 # Prior to Python 3.3, the value for any Linux version is always linux2; after, it is linux.
 # https://stackoverflow.com/a/13874620/15384838
-PLATFORM_LINUX: bool = (sys.platform == 'linux' or sys.platform == 'linux2')
-
+PLATFORM_LINUX: bool = sys.platform == "linux" or sys.platform == "linux2"
 
 
 ##################################
@@ -42,9 +41,9 @@ PLATFORM_LINUX: bool = (sys.platform == 'linux' or sys.platform == 'linux2')
 DEFAULT_EXECUTABLE: str
 
 if PLATFORM_WINDOWS:
-	DEFAULT_EXECUTABLE = "exiftool.exe"
-else: # pytest-cov:windows: no cover
-	DEFAULT_EXECUTABLE = "exiftool"
+    DEFAULT_EXECUTABLE = "exiftool.exe"
+else:  # pytest-cov:windows: no cover
+    DEFAULT_EXECUTABLE = "exiftool"
 """The name of the executable to run.
 
 If the executable is not located in one of the paths listed in the
@@ -52,17 +51,15 @@ If the executable is not located in one of the paths listed in the
 """
 
 
-
 ##################################
 ####### STARTUP CONSTANTS ########
 ##################################
 
 # for Windows STARTUPINFO
-SW_FORCEMINIMIZE: int = 11 # from win32con
+SW_FORCEMINIMIZE: int = 11  # from win32con
 
 # for Linux preexec_fn
-PR_SET_PDEATHSIG: int = 1 # taken from linux/prctl.h
-
+PR_SET_PDEATHSIG: int = 1  # taken from linux/prctl.h
 
 
 ##################################
