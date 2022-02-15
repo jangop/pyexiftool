@@ -160,17 +160,33 @@ def _read_fd_endswith(fd, b_endswith, block_size: int):
 class ExifTool(object):
 	"""Run the `exiftool` command-line tool and communicate with it.
 
-	The argument ``print_conversion`` determines whether exiftool should
-	perform print conversion, which prints values in a human-readable way but
+	There argument ``print_conversion`` no longer exists.  Use ``common_args``
+	to enable/disable print conversion by specifying or not ``-n``.
+	This determines whether exiftool should perform print conversion,
+	which prints values in a human-readable way but
 	may be slower. If print conversion is enabled, appending ``#`` to a tag
 	name disables the print conversion for this particular tag.
+	See Exiftool documentation for more details:  https://exiftool.org/faq.html#Q6
 
-	You can pass two arguments to the constructor:
-	- ``common_args`` (list of strings): contains additional paramaters for
-	  the stay-open instance of exiftool
+	You can pass optional arguments to the constructor:
 	- ``executable`` (string): file name of the ``exiftool`` executable.
 	  The default value ``exiftool`` will only work if the executable
 	  is in your ``PATH``
+	  You can also specify the full path to the ``exiftool`` executable.
+	  See :py:attr:`executable` property for more details.
+	- ``common_args`` (list of strings): contains additional paramaters for
+	  the stay-open instance of exiftool.  The default is ``-G`` and ``-n``.
+	  Read the exiftool documenation to get further information on what the
+	  args do:  https://exiftool.org/exiftool_pod.html
+	- ``win_shell``
+	- ``config_file`` (string): file path to ``-config`` parameter when
+	  starting process.
+	  See :py:attr:`config_file` property for more details.
+	- ``encoding`` (string): encoding to be used when communicating with
+	  exiftool process.  By default, will use ``locale.getpreferredencoding()``
+	  See :py:attr:`encoding` property for more details
+	- ``logger`` (object):  Set a custom logger to log status and debug messages to.
+	  See :py:meth:``_set_logger()` for more details.
 
 	Most methods of this class are only available after calling
 	:py:meth:`start()`, which will actually launch the subprocess.  To
@@ -193,7 +209,7 @@ class ExifTool(object):
 	   options will be silently ignored by exiftool, so there's not
 	   much that can be done in that regard.  You should avoid passing
 	   non-existent files to any of the methods, since this will lead
-	   to undefied behaviour.
+	   to undefined behaviour.
 
 	.. py:attribute:: _running
 
@@ -303,7 +319,7 @@ class ExifTool(object):
 	def executable(self, new_executable) -> None:
 		"""
 		Set the executable.  Does error checking.
-
+		You can specify just the executable name, or a full path
 		"""
 		# cannot set executable when process is running
 		if self.running:
@@ -462,28 +478,6 @@ class ExifTool(object):
 
 		return self._ver
 
-
-	# ----------------------------------------------------------------------------------------------------------------------
-	@property
-	def version_tuple(self) -> tuple:
-		""" returns a parsed (major, minor) with integers """
-		if not self.running:
-			raise RuntimeError("Can't get ExifTool version when it's not running!")
-
-		# TODO this isn't entirely tested... possibly a version with more "." or something might break this parsing
-		arr: List = self._ver.split(".", 1)  # split to (major).(whatever)
-
-		res: List = []
-		try:
-			for v in arr:
-				res.append(int(v))
-		except ValueError:
-			raise ValueError(f"Error parsing ExifTool version: '{self._ver}'")
-
-		return tuple(res)
-
-
-
 	# ----------------------------------------------------------------------------------------------------------------------
 	@property
 	def last_stdout(self) -> Optional[str]:
@@ -581,6 +575,8 @@ class ExifTool(object):
 
 		If it doesn't run successfully, an error will be raised, otherwise, the ``exiftool`` process has started
 
+		If the minimum required version check fails, a RuntimeError will be raised, and exiftool is automatically terminated.
+
 		(if you have another executable named exiftool which isn't exiftool, then you're shooting yourself in the foot as there's no error checking for that)
 		"""
 		if self.running:
@@ -607,6 +603,9 @@ class ExifTool(object):
 		kwargs: dict = {}
 
 		if constants.PLATFORM_WINDOWS:
+			# TODO: I don't think this code actually does anything ... I've never seen a console pop up on Windows
+			# Perhaps need to specify subprocess.STARTF_USESHOWWINDOW to actually have any console pop up?
+			# https://docs.python.org/3/library/subprocess.html#windows-popen-helpers
 			startup_info = subprocess.STARTUPINFO()
 			if not self._win_shell:
 				# Adding enum 11 (SW_FORCEMINIMIZE in win32api speak) will
@@ -652,10 +651,27 @@ class ExifTool(object):
 
 		# get ExifTool version here and any Exiftool metadata
 		# this can also verify that it is really ExifTool we ran, not some other random process
-		self._ver = self._parse_ver()
+		try:
+			# apparently because .execute() has code that already depends on v12.15+ functionality, this will throw a ValueError immediately with
+			#   ValueError: invalid literal for int() with base 10: '${status}'
+			self._ver = self._parse_ver()
+		except ValueError:
+			# trap the error and return it as a minimum version problem
+			self.terminate()
+			raise RuntimeError(f"Error retrieving Exiftool info.  Is your Exiftool version ('exiftool -ver') >= required version ('{constants.EXIFTOOL_MINIMUM_VERSION}')?")
 
 		if self._logger: self._logger.info(f"Method 'run': Exiftool version '{self._ver}' (pid {self._process.pid}) launched with args '{proc_args}'")
 
+
+		# currently not needed... if it passes -ver, the rest is OK
+		"""
+		# check that the minimum required version is met, if not, terminate...
+		# if you run against a version which isn't supported, strange errors come up during execute()
+		if not self._exiftool_version_check():
+			self.terminate()
+			if self._logger: self._logger.error(f"Method 'run': Exiftool version '{self._ver}' did not meet the required minimum version '{constants.EXIFTOOL_MINIMUM_VERSION}'")
+			raise RuntimeError(f"exiftool version '{self._ver}' < required '{constants.EXIFTOOL_MINIMUM_VERSION}'")
+		"""
 
 
 	# ----------------------------------------------------------------------------------------------------------------------
@@ -748,11 +764,10 @@ class ExifTool(object):
 		seq_err_post = f"post{signal_num}"  # default there isn't any string
 
 		SEQ_ERR_STATUS_DELIM = "="  # this can be configured to be one or more chacters... the code below will accomodate for longer sequences: len() >= 1
-		seq_err_status = "${status}"  # a special sequence, ${status} returns EXIT STATUS as per exiftool documentation
+		seq_err_status = "${status}"  # a special sequence, ${status} returns EXIT STATUS as per exiftool documentation - only supported on exiftool v12.10+
 
-		cmd_text = "\n".join(params + ("-echo4", SEQ_ERR_STATUS_DELIM + seq_err_status + SEQ_ERR_STATUS_DELIM + seq_err_post, seq_execute))
-		# cmd_text.encode("utf-8") # a commit put this in the next line, but i can't get it to work TODO
-		# might look at something like this https://stackoverflow.com/questions/7585435/best-way-to-convert-string-to-bytes-in-python-3
+		# f-strings are faster than concatentation of multiple strings -- https://stackoverflow.com/questions/59180574/string-concatenation-with-vs-f-string
+		cmd_text = "\n".join(params + ("-echo4", f"{SEQ_ERR_STATUS_DELIM}{seq_err_status}{SEQ_ERR_STATUS_DELIM}{seq_err_post}", seq_execute))
 
 
 		# ---------- write to the pipe connected with exiftool process ----------
@@ -924,5 +939,50 @@ class ExifTool(object):
 		# -v gives you more info (perl version, platform, libraries) but isn't helpful for this library
 		# -v2 gives you even more, but it's less useful at that point
 		return self.execute("-ver").strip()
+
+	# ----------------------------------------------------------------------------------------------------------------------
+	"""
+	def _exiftool_version_check(self) -> bool:
+		"" " private method to check the minimum required version of ExifTool
+
+		returns false if the version check fails
+		returns true if it's OK
+
+		"" "
+
+		# parse (major, minor) with integers... so far Exiftool versions are all ##.## with no exception
+		# this isn't entirely tested... possibly a version with more "." or something might break this parsing
+		arr: List = self._ver.split(".", 1)  # split to (major).(whatever)
+
+		version_nums: List = []
+		try:
+			for v in arr:
+				res.append(int(v))
+		except ValueError:
+			raise ValueError(f"Error parsing ExifTool version for version check: '{self._ver}'")
+
+		if len(version_nums) != 2:
+			raise ValueError(f"Expected Major.Minor len()==2, got: {version_nums}")
+
+		curr_major, curr_minor = version_nums
+
+
+		# same logic above except on one line
+		req_major, req_minor = [int(x) for x in constants.EXIFTOOL_MINIMUM_VERSION.split(".", 1)]
+
+		if curr_major > req_major:
+			# major version is bigger
+			return True
+		elif curr_major < req_major:
+			# major version is smaller
+			return False
+		elif curr_minor >= req_minor:
+			# major version is equal
+			# current minor is equal or better
+			return True
+		else:
+			# anything else is False
+			return False
+	"""
 
 	# ----------------------------------------------------------------------------------------------------------------------
