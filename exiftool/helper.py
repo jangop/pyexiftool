@@ -24,6 +24,7 @@ This contains a helper class, which makes it easier to use the low-level ExifToo
 """
 
 import logging
+import os.path
 
 from .exiftool import ExifTool
 
@@ -120,7 +121,7 @@ class ExifToolHelper(ExifTool):
 
 
 	# ----------------------------------------------------------------------------------------------------------------------
-	def get_metadata(self, files, params=None):
+	def get_metadata(self, files, params=None, check_exist=False):
 		"""Return all meta-data for the given files.
 
 			This will returns a list, or None
@@ -132,11 +133,11 @@ class ExifToolHelper(ExifTool):
 		The return value will have the format described in the
 		documentation of :py:meth:`get_tags()`.
 		"""
-		return self.get_tags(files, None, params=params)
+		return self.get_tags(files, None, params=params, check_exist=check_exist)
 
 
 	# ----------------------------------------------------------------------------------------------------------------------
-	def get_tags(self, files, tags, params=None):
+	def get_tags(self, files, tags, params=None, check_exist=False):
 		"""Return only specified tags for the given files.
 
 		The first argument is the files to be worked on.  It can be:
@@ -187,6 +188,11 @@ class ExifToolHelper(ExifTool):
 			final_files = [x if isinstance(x, basestring) else str(x) for x in files]
 
 			# TODO: this list copy could be expensive if the input is a very huge list.  Perhaps in the future have a flag that takes the lists in verbatim without any processing?
+
+		if check_exist:
+			for file in final_files:
+				if not os.path.exists(file):
+					raise FileNotFoundError(f"{file} not does exist")
 
 		exec_params = []
 

@@ -35,11 +35,21 @@ class ReadingTest(unittest.TestCase):
 
 		ExifToolHelper DOES NOT check each individual file in the list for existence.  If you pass invalid files to exiftool, undefined behavior can occur
 		"""
-		with self.assertRaises(exiftool.NoOutput):
-			self.exif_tool_helper.get_metadata(['foo.bar'])
+		with self.subTest():
+			with self.assertRaises(exiftool.NoOutput):
+				self.exif_tool_helper.get_metadata(['foo.bar'])
 
-		with self.assertRaises(exiftool.NoOutput):
-			self.exif_tool_helper.get_tags('foo.bar', 'DateTimeOriginal')
+		with self.subTest():
+			with self.assertRaises(exiftool.NoOutput):
+				self.exif_tool_helper.get_tags('foo.bar', 'DateTimeOriginal')
+
+		with self.subTest():
+			with self.assertRaises(FileNotFoundError):
+				self.exif_tool_helper.get_metadata(['foo.bar'], check_exist=True)
+
+		with self.subTest():
+			with self.assertRaises(FileNotFoundError):
+				self.exif_tool_helper.get_tags('foo.bar', 'DateTimeOriginal', check_exist=True)
 
 
 
