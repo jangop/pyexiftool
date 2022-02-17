@@ -81,7 +81,7 @@ import warnings
 
 
 
-# ---------- Linting Imports ----------
+# ---------- Typing Imports ----------
 # for static analysis / type checking - Python 3.5+
 from collections.abc import Callable
 from typing import Optional, List
@@ -99,6 +99,10 @@ from . import constants
 # constants to make typos obsolete!
 ENCODING_UTF8: str = "utf-8"
 #ENCODING_LATIN1: str = "latin-1"
+
+
+class NoOutput(Exception):
+	"""Indicates that exiftool returned no parsable output."""
 
 
 # ======================================================================================================================
@@ -253,7 +257,7 @@ class ExifTool(object):
 		self._executable: Optional[str] = None  # executable absolute path
 		self._config_file: Optional[str] = None  # config file that can only be set when exiftool is not running
 		self._common_args: Optional[List[str]] = None
-		self._no_output = None  # TODO examine whether this is needed
+		self._expect_no_output = None  # TODO examine whether this is needed
 		self._logger = None
 		self._encoding = None
 
@@ -417,7 +421,7 @@ class ExifTool(object):
 			raise TypeError("common_args not a list of strings")
 
 		# TODO examine if this is still a needed thing
-		self._no_output = '-w' in self._common_args
+		self._expect_no_output = '-w' in self._common_args
 
 		if self._logger: self._logger.info(f"Property 'common_args': set to \"{self._common_args}\"")
 
@@ -827,8 +831,6 @@ class ExifTool(object):
 		# if you need other output, retrieve from properties
 		return self._last_stdout
 
-
-
 	# ----------------------------------------------------------------------------------------------------------------------
 	def execute_json(self, *params):
 		"""Execute the given batch of parameters and parse the JSON output.
@@ -853,22 +855,10 @@ class ExifTool(object):
 		as Unicode strings in Python 3.x.
 		"""
 
-
-		"""
-		params = map(os.fsencode, params)  # don't fsencode all params, leave them alone for exiftool process to manage
-		# Some latin bytes won't decode to utf-8.
-		# Try utf-8 and fallback to latin.
-		# http://stackoverflow.com/a/5552623/1318758
-		# https://github.com/jmathai/elodie/issues/127
-		"""
-
-		res_stdout = self.execute("-j", *params)
-		# TODO these aren't used, if not important, comment them out
-		res_err = self._last_stderr
-		res_status = self._last_status
+		result = self.execute("-j", *params)
 
 
-		if len(res_stdout) == 0:
+		if len(result) == 0:
 			# the output from execute() can be empty under many relatively ambiguous situations
 			# * command has no files it worked on
 			# * a file specified or files does not exist
@@ -877,35 +867,17 @@ class ExifTool(object):
 			#
 			# There's no easy way to check which params are files, or else we have to reproduce the parser exiftool does (so it's hard to detect to raise a FileNotFoundError)
 
-			# Returning [] could be ambugious if Exiftool changes the returned JSON structure in the future
+			# Returning [] could be ambiguous if Exiftool changes the returned JSON structure in the future
 			# Returning None is the safest as it clearly indicates that nothing came back from execute()
-			return None
+			if not self._expect_no_output:
+				raise NoOutput()
 
+		if self._expect_no_output:
+			raise RuntimeError(f"No output expected but something was returned:\n{result}")
 
-		res_decoded = res_stdout
-		"""
-		# TODO use fsdecode?
-		# os.fsdecode() instead of res_stdout.decode()
-		try:
-			res_decoded = res_stdout
-		except UnicodeDecodeError:
-			res_decoded = res_stdout.decode(ENCODING_LATIN1)
-		"""
-		# TODO res_decoded can be invalid json (test this) if `-w` flag is specified in common_args
-		# which will return something like
-		# image files read
-		# output files created
+		parsed = json.loads(result)
 
-		# res_decoded is also not valid if you do metadata manipulation without returning anything
-		if self._no_output:
-			print(res_decoded)
-			# TODO: test why is this not returning anything from this function?? what if we are SETTING something and not GETTING?
-		else:
-			# TODO: if len(res_decoded) == 0, then there's obviously an error here
-			#print(res_decoded)
-			return json.loads(res_decoded)
-
-		# TODO , return_tuple will also beautify stderr and output status as well
+		return parsed
 
 
 	#########################################################################################

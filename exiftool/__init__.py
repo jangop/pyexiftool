@@ -5,7 +5,7 @@
 __version__ = "0.5.0-alpha.0"
 
 # make all of the original exiftool stuff available in this namespace
-from .exiftool import ExifTool
+from .exiftool import ExifTool, NoOutput
 from .helper import ExifToolHelper
 from .experimental import ExifToolAlpha
 
