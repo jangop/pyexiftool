@@ -81,16 +81,17 @@ import warnings
 
 
 
-# ---------- Linting Imports ----------
+# ---------- Typing Imports ----------
 # for static analysis / type checking - Python 3.5+
 from collections.abc import Callable
-from typing import Optional, List
+from typing import Optional, List, Union
 
 
 
 # ---------- Library Package Imports ----------
 
 from . import constants
+from .exceptions import ExifToolVersionError, ExifToolRunning, ExifToolNotRunning, OutputEmpty, OutputNotJSON
 
 
 # ======================================================================================================================
@@ -116,7 +117,7 @@ def _set_pdeathsig(sig) -> Optional[Callable]:
 
 		return callable_method
 	else:
-		return None
+		return None  # pragma: no cover
 
 
 # ======================================================================================================================
@@ -228,7 +229,7 @@ class ExifTool(object):
 	  common_args: Optional[List[str]] = ["-G", "-n"],
 	  win_shell: bool = False,
 	  config_file: Optional[str] = None,
-	  encoding = None,
+	  encoding: Optional[str] = None,
 	  logger = None) -> None:
 		""" common_args defaults to -G -n as this is the most common use case.
 		-n improves the speed, and consistency of output is more machine-parsable
@@ -240,7 +241,7 @@ class ExifTool(object):
 		self._win_shell: bool = win_shell  # do you want to see the shell on Windows?
 
 		self._process = None  # this is set to the process to interact with when _running=True
-		self._ver = None  # this is set to be the exiftool -v -ver when running
+		self._ver: Optional[str] = None  # this is set to be the exiftool -v -ver when running
 
 		self._last_stdout: Optional[str] = None  # previous output
 		self._last_stderr: Optional[str] = None  # previous stderr
@@ -253,9 +254,8 @@ class ExifTool(object):
 		self._executable: Optional[str] = None  # executable absolute path
 		self._config_file: Optional[str] = None  # config file that can only be set when exiftool is not running
 		self._common_args: Optional[List[str]] = None
-		self._no_output = None  # TODO examine whether this is needed
 		self._logger = None
-		self._encoding = None
+		self._encoding: Optional[str] = None
 
 
 
@@ -312,18 +312,18 @@ class ExifTool(object):
 
 	# ----------------------------------------------------------------------------------------------------------------------
 	@property
-	def executable(self):
+	def executable(self) -> str:
 		return self._executable
 
 	@executable.setter
-	def executable(self, new_executable) -> None:
+	def executable(self, new_executable: Union[str, Path]) -> None:
 		"""
 		Set the executable.  Does error checking.
 		You can specify just the executable name, or a full path
 		"""
 		# cannot set executable when process is running
 		if self.running:
-			raise RuntimeError("Cannot set new executable while Exiftool is running")
+			raise ExifToolRunning("Cannot set new executable")
 
 		abs_path: Optional[str] = None
 
@@ -340,18 +340,18 @@ class ExifTool(object):
 				raise FileNotFoundError(f'"{new_executable}" is not found, on path or as absolute path')
 
 		# absolute path is returned
-		self._executable = abs_path
+		self._executable = str(abs_path)
 
 		if self._logger: self._logger.info(f"Property 'executable': set to \"{abs_path}\"")
 
 
 	# ----------------------------------------------------------------------------------------------------------------------
 	@property
-	def encoding(self):
+	def encoding(self) -> Optional[str]:
 		return self._encoding
 
 	@encoding.setter
-	def encoding(self, new_encoding) -> None:
+	def encoding(self, new_encoding: Optional[str]) -> None:
 		"""
 		Set the encoding of Popen() communication with exiftool process.  Does error checking.
 
@@ -361,9 +361,9 @@ class ExifTool(object):
 		this does NOT validate the encoding for validity.  It is passed verbatim into subprocess.Popen()
 		"""
 
-		# cannot set executable when process is running
+		# cannot set encoding when process is running
 		if self.running:
-			raise RuntimeError("Cannot set new executable while Exiftool is running")
+			raise ExifToolRunning("Cannot set new encoding")
 
 		# auto-detect system specific
 		self._encoding = new_encoding or (locale.getpreferredencoding(do_setlocale=False) or ENCODING_UTF8)
@@ -405,7 +405,7 @@ class ExifTool(object):
 		"""
 
 		if self.running:
-			raise RuntimeError("Cannot set new common_args while exiftool is running!")
+			raise ExifToolRunning("Cannot set new common_args")
 
 		if new_args is None:
 			self._common_args = []
@@ -416,32 +416,37 @@ class ExifTool(object):
 		else:
 			raise TypeError("common_args not a list of strings")
 
-		# TODO examine if this is still a needed thing
-		self._no_output = '-w' in self._common_args
-
 		if self._logger: self._logger.info(f"Property 'common_args': set to \"{self._common_args}\"")
 
 
 	# ----------------------------------------------------------------------------------------------------------------------
 	@property
 	def config_file(self) -> Optional[str]:
+		""" Return currently set config file """
 		return self._config_file
 
 	@config_file.setter
-	def config_file(self, new_config_file: Optional[str]) -> None:
+	def config_file(self, new_config_file: Optional[Union[str, Path]]) -> None:
 		""" set the config_file parameter
 
-		if running==True, it will throw an error.  Can only set config_file when exiftool is not running
+		set to None to disable the -config parameter to exiftool
+		set to "" has special meaning and disables loading of default config file.  See exiftool documentation for more info
+
+		if :py:attr:`running` == True, it will throw an error.  Can only set config_file when exiftool is not running
 		"""
 		if self.running:
-			raise RuntimeError("Cannot set a new config_file while exiftool is running!")
+			raise ExifToolRunning("Cannot set a new config_file")
 
 		if new_config_file is None:
 			self._config_file = None
+		elif new_config_file == "":
+			# this is VALID usage of -config parameter
+			# As per exiftool documentation:  Loading of the default config file may be disabled by setting CFGFILE to an empty string (ie. "")
+			self._config_file = ""
 		elif not Path(new_config_file).exists():
 			raise FileNotFoundError("The config file could not be found")
 		else:
-			self._config_file = new_config_file
+			self._config_file = str(new_config_file)
 
 		if self._logger: self._logger.info(f"Property 'config_file': set to \"{self._config_file}\"")
 
@@ -454,8 +459,15 @@ class ExifTool(object):
 	# ----------------------------------------------------------------------------------------------------------------------
 	@property
 	def running(self) -> bool:
-		# read-only property
+		"""
+		Read-only property which indicates whether the ExifTool instance is running or not
 
+		.. note::
+			This checks to make sure the process is still alive.
+
+			If the process has died since last `running` detection, this property
+			will detect that and reset the status accordingly
+		"""
 		if self._running:
 			# check if the process is actually alive
 			if self._process.poll() is not None:
@@ -471,35 +483,59 @@ class ExifTool(object):
 	# ----------------------------------------------------------------------------------------------------------------------
 	@property
 	def version(self) -> str:
-		""" returns a string from -ver """
+		"""
+		Read-only property which is the string returned by `exiftool -ver`
+
+		The `-ver` command is ran once at process startup and cached.
+
+		This property is only valid when :py:attr:`running` == True
+		"""
 
 		if not self.running:
-			raise RuntimeError("Can't get ExifTool version when it's not running!")
+			raise ExifToolNotRunning("Can't get ExifTool version")
 
 		return self._ver
 
 	# ----------------------------------------------------------------------------------------------------------------------
 	@property
 	def last_stdout(self) -> Optional[str]:
-		"""last output stdout from execute()
-		currently it is INTENTIONALLY _NOT_ CLEARED on exiftool termination and not dependent on running state
-		This allows for executing a command and terminating, but still haven't last* around."""
+		"""
+		STDOUT for most recent result from execute()
+
+		.. note::
+			This property can be read at any time, and is not dependent on running state of ExifTool.
+
+			It is INTENTIONALLY *NOT* CLEARED on exiftool termination, to allow
+			for executing a command and terminating, but still have result available.
+		"""
 		return self._last_stdout
 
 	# ----------------------------------------------------------------------------------------------------------------------
 	@property
 	def last_stderr(self) -> Optional[str]:
-		"""last output stderr from execute()
-		currently it is INTENTIONALLY _NOT_ CLEARED on exiftool termination and not dependent on running state
-		This allows for executing a command and terminating, but still haven't last* around."""
+		"""
+		STDERR for most recent result from execute()
+
+		.. note::
+			This property can be read at any time, and is not dependent on running state of ExifTool.
+
+			It is INTENTIONALLY *NOT* CLEARED on exiftool termination, to allow
+			for executing a command and terminating, but still have result available.
+		"""
 		return self._last_stderr
 
 	# ----------------------------------------------------------------------------------------------------------------------
 	@property
 	def last_status(self) -> Optional[int]:
-		"""last exit status from execute()
-		currently it is INTENTIONALLY _NOT_ CLEARED on exiftool termination and not dependent on running state
-		This allows for executing a command and terminating, but still haven't last* around."""
+		"""
+		Exit Status Code for most recent result from execute()
+
+		.. note::
+			This property can be read at any time, and is not dependent on running state of ExifTool.
+
+			It is INTENTIONALLY *NOT* CLEARED on exiftool termination, to allow
+			for executing a command and terminating, but still have result available.
+		"""
 		return self._last_status
 
 
@@ -547,7 +583,11 @@ class ExifTool(object):
 	# https://stackoverflow.com/questions/17576009/python-class-property-use-setter-but-evade-getter
 	# https://docs.python.org/3/howto/descriptor.html#properties
 	# can have it named same or different
-	logger = property(fset=_set_logger, doc="'logger' property to set to the class logging.Logger")
+	logger = property(fset=_set_logger, doc="""
+		Write-only property to set the class of logging.Logger
+
+		If this is set, then status messages will log out to the given class.
+	""")
 
 
 
@@ -587,7 +627,8 @@ class ExifTool(object):
 		proc_args = [self._executable, ]
 
 		# If working with a config file, it must be the first argument after the executable per: https://exiftool.org/config.html
-		if self._config_file:
+		if self._config_file is not None:
+			# must check explicitly for None, as "" is valid
 			proc_args.extend(["-config", self._config_file])
 
 		# this is the required stuff for the stay_open that makes pyexiftool so great!
@@ -658,19 +699,20 @@ class ExifTool(object):
 		except ValueError:
 			# trap the error and return it as a minimum version problem
 			self.terminate()
-			raise RuntimeError(f"Error retrieving Exiftool info.  Is your Exiftool version ('exiftool -ver') >= required version ('{constants.EXIFTOOL_MINIMUM_VERSION}')?")
+			raise ExifToolVersionError(f"Error retrieving Exiftool info.  Is your Exiftool version ('exiftool -ver') >= required version ('{constants.EXIFTOOL_MINIMUM_VERSION}')?")
 
 		if self._logger: self._logger.info(f"Method 'run': Exiftool version '{self._ver}' (pid {self._process.pid}) launched with args '{proc_args}'")
 
 
-		# currently not needed... if it passes -ver, the rest is OK
+		# currently not needed... if it passes -ver check, the rest is OK
+		# may use in the future again if another version feature is needed but the -ver check passes
 		"""
 		# check that the minimum required version is met, if not, terminate...
 		# if you run against a version which isn't supported, strange errors come up during execute()
 		if not self._exiftool_version_check():
 			self.terminate()
 			if self._logger: self._logger.error(f"Method 'run': Exiftool version '{self._ver}' did not meet the required minimum version '{constants.EXIFTOOL_MINIMUM_VERSION}'")
-			raise RuntimeError(f"exiftool version '{self._ver}' < required '{constants.EXIFTOOL_MINIMUM_VERSION}'")
+			raise ExifToolVersionError(f"exiftool version '{self._ver}' < required '{constants.EXIFTOOL_MINIMUM_VERSION}'")
 		"""
 
 
@@ -682,7 +724,6 @@ class ExifTool(object):
 		"""
 		if not self.running:
 			warnings.warn("ExifTool not running; doing nothing.", UserWarning)
-			# TODO, maybe add an optional parameter that says ignore_running/check/force or something which will not warn
 			return
 
 		if _del and constants.PLATFORM_WINDOWS:
@@ -746,7 +787,7 @@ class ExifTool(object):
 		   rarely be needed by application developers.
 		"""
 		if not self.running:
-			raise RuntimeError("ExifTool instance not running.")
+			raise ExifToolNotRunning("Cannot execute()")
 
 
 		# ---------- build the special params to execute ----------
@@ -792,13 +833,13 @@ class ExifTool(object):
 
 		# save the outputs to some variables first
 		cmd_stdout = raw_stdout.strip()[:-len(seq_ready)]
-		cmd_stderr = raw_stderr.strip()[:-len(seq_err_post)]  # save it in case the RuntimeError happens and output can be checked easily
+		cmd_stderr = raw_stderr.strip()[:-len(seq_err_post)]  # save it in case the error below happens and output can be checked easily
 
 		# sanity check the status code from the stderr output
 		delim_len = len(SEQ_ERR_STATUS_DELIM)
 		if cmd_stderr[-delim_len:] != SEQ_ERR_STATUS_DELIM:
 			# exiftool is expected to dump out the status code within the delims... if it doesn't, the class is broken
-			raise RuntimeError(f"Exiftool expected to return status on stderr, but got unexpected character: {cmd_stderr[-delim_len:]} != {SEQ_ERR_STATUS_DELIM}")
+			raise ExifToolVersionError(f"Exiftool expected to return status on stderr, but got unexpected character: {cmd_stderr[-delim_len:]} != {SEQ_ERR_STATUS_DELIM}")
 
 		# look for the previous delim (we could use regex here to do all this in one step, but it's probably overkill, and could slow down the code significantly)
 		# the other simplification that can be done is that, Exiftool is expected to only return 0, 1, or 2 as per documentation
@@ -853,59 +894,45 @@ class ExifTool(object):
 		as Unicode strings in Python 3.x.
 		"""
 
+		result = self.execute("-j", *params)  # stdout
 
+		# TODO check status code or have caller do it?
 		"""
-		params = map(os.fsencode, params)  # don't fsencode all params, leave them alone for exiftool process to manage
-		# Some latin bytes won't decode to utf-8.
-		# Try utf-8 and fallback to latin.
-		# http://stackoverflow.com/a/5552623/1318758
-		# https://github.com/jmathai/elodie/issues/127
+		status_code = self._last_status  # status code
+		if status_code != 0:
+			warnings.warn(f"ExifTool returned a non-zero status code: {status_code}", UserWarning)
 		"""
 
-		res_stdout = self.execute("-j", *params)
-		# TODO these aren't used, if not important, comment them out
-		res_err = self._last_stderr
-		res_status = self._last_status
 
-
-		if len(res_stdout) == 0:
+		if len(result) == 0:
 			# the output from execute() can be empty under many relatively ambiguous situations
 			# * command has no files it worked on
 			# * a file specified or files does not exist
 			# * some other type of error
-			# * a command that does not return anything (like setting tags)
+			# * a command that does not return anything (like metadata manipulation/setting tags)
 			#
 			# There's no easy way to check which params are files, or else we have to reproduce the parser exiftool does (so it's hard to detect to raise a FileNotFoundError)
 
-			# Returning [] could be ambugious if Exiftool changes the returned JSON structure in the future
-			# Returning None is the safest as it clearly indicates that nothing came back from execute()
-			return None
+			# Returning [] could be ambiguous if Exiftool changes the returned JSON structure in the future
+			# Returning None was preferred, because it's the safest as it clearly indicates that nothing came back from execute(), but it means execute_json() doesn't always return JSON
+			raise OutputEmpty("ExifTool did not return any stdout")
 
 
-		res_decoded = res_stdout
-		"""
-		# TODO use fsdecode?
-		# os.fsdecode() instead of res_stdout.decode()
 		try:
-			res_decoded = res_stdout
-		except UnicodeDecodeError:
-			res_decoded = res_stdout.decode(ENCODING_LATIN1)
-		"""
-		# TODO res_decoded can be invalid json (test this) if `-w` flag is specified in common_args
-		# which will return something like
-		# image files read
-		# output files created
+			parsed = json.loads(result)
+		except json.JSONDecodeError as e:
+			# if `-w` flag is specified in common_args or params, stdout will not be JSON parseable
+			#
+			# which will return something like:
+			#   x image files read
+			#   x output files created
 
-		# res_decoded is also not valid if you do metadata manipulation without returning anything
-		if self._no_output:
-			print(res_decoded)
-			# TODO: test why is this not returning anything from this function?? what if we are SETTING something and not GETTING?
-		else:
-			# TODO: if len(res_decoded) == 0, then there's obviously an error here
-			#print(res_decoded)
-			return json.loads(res_decoded)
+			# the user is expected to know this ahead of time, and if -w exists in common_args or as a param, this error will be thrown
 
-		# TODO , return_tuple will also beautify stderr and output status as well
+			# explicit chaining https://www.python.org/dev/peps/pep-3134/
+			raise OutputNotJSON() from e
+
+		return parsed
 
 
 	#########################################################################################
@@ -932,7 +959,7 @@ class ExifTool(object):
 			and parse out the information
 		"""
 		if not self.running:
-			raise RuntimeError("ExifTool instance not running.")
+			raise ExifToolNotRunning("Cannot get version")
 
 
 		# -ver is just the version

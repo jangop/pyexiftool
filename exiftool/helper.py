@@ -26,6 +26,7 @@ This contains a helper class, which makes it easier to use the low-level ExifToo
 import logging
 
 from .exiftool import ExifTool
+from .exceptions import OutputEmpty, OutputNotJSON
 
 try:        # Py3k compatibility
 	basestring
@@ -93,6 +94,15 @@ class ExifToolHelper(ExifTool):
 			self.run()
 
 		return super().execute(*params)
+
+
+	# ----------------------------------------------------------------------------------------------------------------------
+	def run(self) -> None:
+		""" override the run() method so that if it's running, won't call super() method (so no warning about 'ExifTool already running' will trigger) """
+		if self.running:
+			return
+
+		super().run()
 
 
 	# ----------------------------------------------------------------------------------------------------------------------
@@ -170,11 +180,11 @@ class ExifToolHelper(ExifTool):
 		elif _is_iterable(tags):
 			final_tags = tags
 		else:
-			raise TypeError("ExifToolHelper.get_tags(): argument 'tags' must be a str/bytes or a list")
+			raise TypeError(f"{self.__class__.__name__}.get_tags: argument 'tags' must be a str/bytes or a list")
 
 		if not files:
 			# Exiftool process would return None anyways
-			raise ValueError("ExifToolHelper.get_tags(): argument 'files' cannot be empty")
+			raise ValueError(f"{self.__class__.__name__}.get_tags: argument 'files' cannot be empty")
 		elif isinstance(files, basestring):
 			final_files = [files]
 		elif not _is_iterable(files):
@@ -198,19 +208,21 @@ class ExifToolHelper(ExifTool):
 				# this is done to avoid accidentally modifying the reference object params
 				exec_params.extend(params)
 			else:
-				raise TypeError("ExifToolHelper.get_tags(): argument 'params' must be a str or a list")
+				raise TypeError(f"{self.__class__.__name__}.get_tags: argument 'params' must be a str or a list")
 
 		# tags is always a list by this point.  It will always be iterable... don't have to check for None
 		exec_params.extend([f"-{t}" for t in final_tags])
 
 		exec_params.extend(final_files)
 
-		ret = self.execute_json(*exec_params)
-
-		if ret is None:
-			raise RuntimeError("ExifToolHelper.get_tags(): exiftool returned no data")
-
-		# TODO if last_status is <> 0, raise a warning that one or more files failed?
+		try:
+			ret = self.execute_json(*exec_params)
+		except OutputEmpty:
+			raise
+			#raise RuntimeError(f"{self.__class__.__name__}.get_tags: exiftool returned no data")
+		except OutputNotJSON:
+			# TODO if last_status is <> 0, raise a warning that one or more files failed?
+			raise
 
 		return ret
 
